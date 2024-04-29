@@ -1,0 +1,152 @@
+{
+  "Comment": "Compare custom model performance with base model",
+  "StartAt": "Parallel",
+  "States": {
+    "Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Validate Custom Model",
+          "States": {
+            "Validate Custom Model": {
+              "Type": "Map",
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "DISTRIBUTED",
+                  "ExecutionType": "STANDARD"
+                },
+                "StartAt": "Invoke Custom Model",
+                "States": {
+                  "Invoke Custom Model": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::bedrock:invokeModel",
+                    "Parameters": {
+                      "ModelId.$": "$.ProvisionedModelArn",
+                      "ContentType": "application/json",
+                      "Body": {
+                        "prompt.$": "$.item.prompt"
+                      }
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ItemReader": {
+                "Resource": "arn:aws:states:::s3:getObject",
+                "ReaderConfig": {
+                  "InputType": "JSON"
+                },
+                "Parameters": {
+                  "Bucket": "${ValidationDataBucket}",
+                  "Key": "validation-data.json"
+                }
+              },
+              "MaxConcurrency": 1,
+              "Label": "FileAnalysisCustom",
+              "ToleratedFailurePercentage": 100,
+              "ToleratedFailureCount": 100,
+              "ResultPath": "$.results",
+              "ItemSelector": {
+                "item.$": "$$.Map.Item.Value",
+                "ProvisionedModelArn.$": "$.ProvisionedModelArn"
+              },
+              "Next": "Save Custom Model Inference"
+            },
+            "Save Custom Model Inference": {
+              "Type": "Task",
+              "Parameters": {
+                "Body.$": "$.results.[*].Body.generations.[*].text",
+                "Bucket": "${ModelInferenceBucket}",
+                "Key": "custom-model-inference.json"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:s3:putObject",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Validate Base Model",
+          "States": {
+            "Validate Base Model": {
+              "Type": "Map",
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "DISTRIBUTED",
+                  "ExecutionType": "STANDARD"
+                },
+                "StartAt": "Invoke Base Model",
+                "States": {
+                  "Invoke Base Model": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::bedrock:invokeModel",
+                    "Parameters": {
+                      "ContentType": "application/json",
+                      "Body": {
+                        "prompt.$": "$.item.prompt"
+                      },
+                      "ModelId.$": "$.BaseModelIdentifier"
+                    },
+                    "End": true
+                  }
+                }
+              },
+              "ItemReader": {
+                "Resource": "arn:aws:states:::s3:getObject",
+                "ReaderConfig": {
+                  "InputType": "JSON"
+                },
+                "Parameters": {
+                  "Bucket": "${ValidationDataBucket}",
+                  "Key": "validation-data.json"
+                }
+              },
+              "MaxConcurrency": 1,
+              "Label": "FileAnalysisBase",
+              "ToleratedFailurePercentage": 100,
+              "ToleratedFailureCount": 100,
+              "ResultPath": "$.results",
+              "ItemSelector": {
+                "item.$": "$$.Map.Item.Value",
+                "BaseModelIdentifier.$": "$.BaseModelIdentifier"
+              },
+              "Next": "Save Base Model Inference"
+            },
+            "Save Base Model Inference": {
+              "Type": "Task",
+              "End": true,
+              "Parameters": {
+                "Body.$": "$.results.[*].Body.generations.[*].text",
+                "Bucket": "${ModelInferenceBucket}",
+                "Key": "base-model-inference.json"
+              },
+              "Resource": "arn:aws:states:::aws-sdk:s3:putObject"
+            }
+          }
+        }
+      ],
+      "Next": "Compare Results"
+    },
+    "Compare Results": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "${ModelEvaluationFunction}:$LATEST"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "End": true
+    }
+  }
+}

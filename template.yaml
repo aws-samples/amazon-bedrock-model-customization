@@ -1,0 +1,364 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: A Step Functions Standard Workflow that customizes a foundation model in Amazon Bedrock
+
+Parameters:
+  SenderEmailId:
+    Type: String
+    Description: Please enter the Email from which email will be sent
+
+  RecipientEmailId:
+    Type: String
+    Description: Please enter the Email to send notification to
+
+  ContainerImageURI:
+    Type: String
+    Description: Docker image URI for the AWS Lambda function 
+
+Resources:
+##########################################################################
+#   Step Functions                                                        #
+##########################################################################
+  StateMachineCustomizeBedrockModel:
+    Type: AWS::Serverless::StateMachine # More info about State Machine Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-statemachine.html
+    Properties:
+      DefinitionUri: statemachine/bedrock-model-customization.asl.json
+      DefinitionSubstitutions:
+        TrainingDataBucket: !Sub "s3://${TrainingDataBucket}"
+        CustomizationOutputBucket: !Sub "s3://${CustomizationOutputBucket}"
+        ValidationDataBucket: !Ref ValidationDataBucket
+        ModelInferenceBucket: !Ref ModelInferenceBucket
+        BedrockModelCustomizationServiceRoleArn: !GetAtt BedrockModelCustomizationServiceRole.Arn
+        StateMachineEvaluateCustomBedrockModelArn: !GetAtt StateMachineEvaluateCustomBedrockModel.Arn
+      Role:
+        Fn::GetAtt: [ StatesExecutionRole, Arn ]
+      Type: STANDARD
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: false
+        Level: 'ALL'
+  StateMachineEvaluateCustomBedrockModel:
+    Type: AWS::Serverless::StateMachine # More info about State Machine Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-statemachine.html
+    Properties:
+      DefinitionUri: statemachine/evaluate-custom-model.asl.json
+      DefinitionSubstitutions:
+        ValidationDataBucket: !Ref ValidationDataBucket
+        ModelInferenceBucket: !Ref ModelInferenceBucket
+        BedrockModelCustomizationServiceRoleArn: !GetAtt BedrockModelCustomizationServiceRole.Arn
+        ModelEvaluationFunction: !GetAtt ModelEvaluationFunction.Arn
+      Role:
+        Fn::GetAtt: [ StatesExecutionRole, Arn ]
+      Type: STANDARD
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+        IncludeExecutionData: false
+        Level: 'ALL'
+##########################################################################
+#  Step Functions Log Group                                             #
+##########################################################################
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join [ "/", [ "/aws/vendedlogs/states", CustomizeBedrockModel]]
+       
+##########################################################################
+#   Roles                                                               #
+##########################################################################
+  StatesExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: CWLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogDelivery"
+                  - "logs:CreateLogStream"
+                  - "logs:GetLogDelivery"
+                  - "logs:UpdateLogDelivery"
+                  - "logs:DeleteLogDelivery"
+                  - "logs:ListLogDeliveries"
+                  - "logs:PutLogEvents"
+                  - "logs:PutResourcePolicy"
+                  - "logs:DescribeResourcePolicies"
+                  - "logs:DescribeLogGroups"
+                Resource: "*"         
+        - PolicyName: BedrockAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:CreateModelCustomizationJob
+                  - bedrock:GetModelCustomizationJob
+                  - bedrock:CreateProvisionedModelThroughput
+                  - bedrock:InvokeModel
+                  - bedrock:DeleteProvisionedModelThroughput
+                  - bedrock:DeleteCustomModel
+                Resource: 
+                  - !Sub arn:aws:bedrock:${AWS::Region}::*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:custom-model/*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:model-customization-job/*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:provisioned-model-throughput/*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:provisioned-model/*
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt BedrockModelCustomizationServiceRole.Arn
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: 
+                  - !Join 
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref TrainingDataBucket
+                      - /*
+                  - !Join 
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref CustomizationOutputBucket
+                      - /*                      
+                  - !Join 
+                    - ""                      
+                    - - "arn:aws:s3:::"
+                      - !Ref ValidationDataBucket
+                      - /*
+                  - !Join 
+                    - ""                      
+                    - - "arn:aws:s3:::"
+                      - !Ref ModelInferenceBucket
+                      - /*      
+        - PolicyName: StepFunctionStartExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                  - states:DescribeExecution
+                  - states:StopExecution
+                Resource: 
+                  - !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
+        - PolicyName: EventRulePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: 
+                  - !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
+        - PolicyName: InvokeLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: 
+                  - !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:*
+  BedrockModelCustomizationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                "aws:SourceAccount": !Sub ${AWS::AccountId}
+              ArnEquals:
+                "aws:SourceArn": !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:model-customization-job/*
+      # Path: "/"
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                Resource:
+                  - !Sub ${TrainingDataBucket.Arn}/*
+                  - !Sub ${TrainingDataBucket.Arn}
+                  - !Sub ${CustomizationOutputBucket.Arn}/*
+                  - !Sub ${CustomizationOutputBucket.Arn}
+                Condition:
+                  StringEquals:
+                    "aws:PrincipalAccount": !Sub ${AWS::AccountId}
+                              
+##########################################################################
+#  Training Data S3 Bucket                                                              #
+##########################################################################
+  TrainingDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-training-data
+
+##########################################################################
+#  Training Data S3 Bucket                                                              #
+##########################################################################
+  CustomizationOutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-training-output
+
+##########################################################################
+#  Custom Model validation data S3 Bucket                                                              #
+##########################################################################
+  ValidationDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-validation-data
+
+##########################################################################
+#  Custom Model Inference Inference S3 Bucket                                                              #
+##########################################################################
+  ModelInferenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-inference
+
+##########################################################################
+# Create SES Email Identity
+##########################################################################
+  SESEmailSender:
+    Type: AWS::SES::EmailIdentity
+    Properties: 
+      EmailIdentity: !Ref SenderEmailId
+
+##########################################################################
+# Create custom model evaluator AWS Lambda function
+##########################################################################
+
+  ModelEvaluationFunction:
+    Type: AWS::Serverless::Function 
+    Properties:
+      CodeUri: .
+      ImageUri: !Ref ContainerImageURI
+      Role: !GetAtt LambdaExecutionRole.Arn
+      PackageType: Image
+      Timeout: 900
+      MemorySize: 10240
+      EphemeralStorage:
+        Size: 10240
+      Environment:
+        Variables:
+          REFERENCE_INFERENCE: reference-inference.json
+          BASE_MODEL_INFERENCE: base-model-inference.json
+          CUSTOM_MODEL_INFERENCE: custom-model-inference.json
+          S3_BUCKET_INFERENCE: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-inference
+          S3_BUCKET_VALIDATION: !Sub ${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-validation-data
+          TRANSFORMERS_CACHE: /tmp/
+          MPLCONFIGDIR: /tmp/
+          SENDER_EMAIL: !Ref SenderEmailId
+          RECIPIENT_EMAIL: !Ref RecipientEmailId
+      Architectures:
+        - x86_64
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub ${ValidationDataBucket.Arn}/*
+                  - !Sub ${ValidationDataBucket.Arn}
+                  - !Sub ${ModelInferenceBucket.Arn}/*
+                  - !Sub ${ModelInferenceBucket.Arn}
+                Condition:
+                  StringEquals:
+                    "aws:PrincipalAccount": !Sub ${AWS::AccountId}
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ses:SendEmail'
+                Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderEmailId}
+
+##########################################################################
+#   Outputs                                                              #
+##########################################################################
+Outputs:
+  StateMachineCustomizeBedrockModelArn:
+    Value: !Ref StateMachineCustomizeBedrockModel
+    Description: StateMachineCustomizeBedrockModel Arn
+
+  BedrockModelCustomizationServiceRoleArn:
+    Description: Service Role for the Bedrock Model Customization
+    Value: !GetAtt BedrockModelCustomizationServiceRole.Arn
+
+  TrainingDataBucket:
+    Description: S3 Bucket for storing Bedrock model customization training data
+    Value: !Ref TrainingDataBucket 
+
+  CustomizationOutputBucket:
+    Description: S3 Bucket for storing Bedrock model customization training data
+    Value: !Ref CustomizationOutputBucket
+
+  ValidationDataBucket:
+    Description: S3 Bucket for storing Bedrock custom model validation data
+    Value: !Ref ValidationDataBucket 
+
+  ModelInferenceBucket:
+    Description: S3 Bucket for storing inference
+    Value: !Ref ModelInferenceBucket
+
