@@ -1,4 +1,0 @@
-image_name=model-evaluation
-repo_name=bedrock-model-customization
-aws_account=796495736600
-aws_region=us-west-2
