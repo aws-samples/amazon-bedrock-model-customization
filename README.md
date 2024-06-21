@@ -4,7 +4,7 @@ The AWS Step Functions Workflow can be started using the AWS CLI or from another
 
 The SAM template deploys an AWS Step Functions workflow that creates custom model by fine tuning a foundation model. It then creates a provisioned throughput with that custom model. Next it evaluates the performance of the custom model with respect to the base model. Text summarization using Amazon Bedrock Cohere Command Light model is taken as an use case. However, the framework can be extended to fine tune other models. The SAM template contains the required resources with IAM permission to run the application.
 
-Important: this application uses various AWS services and there are costs associated with these services after the Free Tier usage - please see the [AWS Pricing page](https://aws.amazon.com/pricing/) for details. You are responsible for any AWS costs incurred. No warranty is implied in this example.
+Important: this application uses various AWS services and there are costs associated with these services after the Free Tier usage - see the [AWS Pricing page](https://aws.amazon.com/pricing/) for details. You are responsible for any AWS costs incurred. No warranty is implied in this example.
 
 ## Requirements
 
@@ -63,15 +63,14 @@ Important: this application uses various AWS services and there are costs associ
 * Upload the training data in JSON Line format into the Amazon S3 training data bucket.
 * Upload the validation data and reference inference in JSON Line format into the Amazon S3 validation data bucket.
 * Start the AWS Step Functions Workflow using the `start-execution` api command with the input payload in JSON format. 
-* The workflow invokes Amazon Bedrock's `CreateModelCustomizationJob` API to fine tune the base model with the traing data from the Amazon S3 bucket and the passed in hyper parameters.
-* The workflow periodically checks for the status of the `CreateModelCustomizationJob`.
-* Once the custom model is created, the workflow invokes Amazon Bedrock's `CreateProvisionedModelThroughput` API to create a Provisioned Throughput with no commitment.
+* The workflow invokes Amazon Bedrock's `CreateModelCustomizationJob` API synchronously to fine tune the base model with the traing data from the Amazon S3 bucket and the passed in hyper parameters.
+* After the custom model is created successfully, the workflow invokes Amazon Bedrock's `CreateProvisionedModelThroughput` API to create a Provisioned Throughput with no commitment.
 * The state machine calls the child statemachine to evaluate the performance of the custom model with respect to the base model. 
 * The child state machine invokes the base model and the customized model provisioned throughput with the same validation data from the Amazon S3 validation bucket and stores the inference into inference bucket.
 * An AWS Lambda function is called to evaluate the quality of the summarization done by custom model and the base model based on BERT score. If the custom model performs worse than the base model, the provisioned throughput is deleted.
 * A notification email is sent with the outcome. 
 
-Please refer to the architecture diagram below:
+Refer to the architecture diagram below:
 
 ![End to End Architecture](image/architecture.png)
 
@@ -84,13 +83,13 @@ Please refer to the architecture diagram below:
    aws s3 cp training-data.jsonl s3://{TrainingDataBucket}/training-data.jsonl --region {your-region}
    ```
 
-2. Upload the `validation-data.json` file to the Amazon S3 bucket using the following command. Replace `ValidationDataBucket` with the value from the `sam deploy --guided` output. Also, please update `your-region` with the region that you provided while running the SAM template.
+2. Upload the `validation-data.json` file to the Amazon S3 bucket using the following command. Replace `ValidationDataBucket` with the value from the `sam deploy --guided` output. Update `your-region` with the region that you provided while running the SAM template.
 
    ```bash
    aws s3 cp validation-data.json s3://{ValidationDataBucket}/validation-data.json --region {your-region}
    ```
 
-3. Upload the `reference-inference.json` file to the Amazon S3 bucket using the following command. Please replace `ValidationDataBucket` with the value from the `sam deploy --guided` output. Update `your-region` with the region that you provided while running the SAM template.
+3. Upload the `reference-inference.json` file to the Amazon S3 bucket using the following command. Replace `ValidationDataBucket` with the value from the `sam deploy --guided` output. Update `your-region` with the region that you provided while running the SAM template.
 
    ```bash
    aws s3 cp reference-inference.json s3://{ValidationDataBucket}/reference-inference.json --region {your-region}
@@ -101,7 +100,7 @@ Please refer to the architecture diagram below:
 ![Sender email id verification](image/EmailAddressVerificationRequest.png)
 
 
-5. Run the following AWS CLI command to start the Step Functions workflow. Please replace `StateMachineCustomizeBedrockModelArn` and `TrainingDataBucket` with the values from the `sam deploy --guided` output. Replace `UniqueModelName`, `UniqueJobName` with unique values. Change the values of the hyperparameters based on the selected model. Update `your-region` with the region that you provided while running the SAM template.
+5. Run the following AWS CLI command to start the Step Functions workflow. Replace `StateMachineCustomizeBedrockModelArn` and `TrainingDataBucket` with the values from the `sam deploy --guided` output. Replace `UniqueModelName`, `UniqueJobName` with unique values. Change the values of the hyperparameters based on the selected model. Update `your-region` with the region that you provided while running the SAM template.
 
     ```bash
     aws stepfunctions start-execution --state-machine-arn "{StateMachineCustomizeBedrockModelArn}" --input "{\"BaseModelIdentifier\": \"cohere.command-light-text-v14:7:4k\",\"CustomModelName\": \"{UniqueModelName}\",\"JobName\": \"{UniqueJobName}\",   \"HyperParameters\": {\"evalPercentage\": \"20.0\", \"epochCount\": \"1\", \"batchSize\": \"8\", \"earlyStoppingPatience\": \"6\", \"earlyStoppingThreshold\": \"0.01\", \"learningRate\": \"0.00001\"},\"TrainingDataFileName\": \"training-data.jsonl\"}" --region {your-region}
