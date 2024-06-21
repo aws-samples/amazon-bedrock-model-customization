@@ -4,7 +4,7 @@
   "States": {
     "CreateCustomModel": {
       "Type": "Task",
-      "Resource": "arn:aws:states:::bedrock:createModelCustomizationJob",
+      "Resource": "arn:aws:states:::bedrock:createModelCustomizationJob.sync",
       "Parameters": {
         "BaseModelIdentifier.$": "$.BaseModelIdentifier",
         "CustomModelName.$": "$.CustomModelName",
@@ -19,36 +19,26 @@
           "S3Uri.$": "States.Format('${TrainingDataBucket}/{}', $.TrainingDataFileName)"
         }
       },
-      "Next": "Wait for next iteration"
-    },
-    "Wait for next iteration": {
-      "Type": "Wait",
-      "Next": "GetModelCustomizationJob",
-      "Seconds": 300
+      "Next": "GetModelCustomizationJob"
     },
     "GetModelCustomizationJob": {
       "Type": "Task",
-      "Next": "Job Complete?",
+      "Next": "Job Completed Successfully?",
       "Parameters": {
         "JobIdentifier.$": "$.JobArn"
       },
       "Resource": "arn:aws:states:::aws-sdk:bedrock:getModelCustomizationJob"
     },
-    "Job Complete?": {
+    "Job Completed Successfully?": {
       "Type": "Choice",
       "Choices": [
-        {
-          "Variable": "$.Status",
-          "StringEquals": "Failed",
-          "Next": "Fail"
-        },
         {
           "Variable": "$.Status",
           "StringEquals": "Completed",
           "Next": "CreateProvisionedModelThroughput"
         }
       ],
-      "Default": "Wait for next iteration"
+      "Default": "Fail"
     },
     "CreateProvisionedModelThroughput": {
       "Type": "Task",
