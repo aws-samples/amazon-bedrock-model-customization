@@ -63,7 +63,7 @@ Important: this application uses various AWS services and there are costs associ
 * Upload the training data in JSON Line format into the Amazon S3 training data bucket.
 * Upload the validation data and reference inference in JSON Line format into the Amazon S3 validation data bucket.
 * Start the AWS Step Functions Workflow using the `start-execution` api command with the input payload in JSON format. 
-* The workflow invokes Amazon Bedrock's `CreateModelCustomizationJob` API synchronously to fine tune the base model with the traing data from the Amazon S3 bucket and the passed in hyper parameters.
+* The workflow invokes Amazon Bedrock's `CreateModelCustomizationJob` API synchronously to fine tune the base model with the training data from the Amazon S3 bucket and the passed in hyperparameters.
 * After the custom model is created successfully, the workflow invokes Amazon Bedrock's `CreateProvisionedModelThroughput` API to create a Provisioned Throughput with no commitment.
 * The state machine calls the child statemachine to evaluate the performance of the custom model with respect to the base model. 
 * The child state machine invokes the base model and the customized model provisioned throughput with the same validation data from the Amazon S3 validation bucket and stores the inference into inference bucket.
